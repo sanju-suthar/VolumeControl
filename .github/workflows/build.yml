@@ -1,0 +1,72 @@
+name: Build Signed Release APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Prepare Custom App Icon (From User Photo or Default)
+        run: |
+          sudo apt-get update && sudo apt-get install -y imagemagick
+          mkdir -p app/src/main/res/mipmap-mdpi
+          mkdir -p app/src/main/res/mipmap-hdpi
+          mkdir -p app/src/main/res/mipmap-xhdpi
+          mkdir -p app/src/main/res/mipmap-xxhdpi
+          mkdir -p app/src/main/res/mipmap-xxxhdpi
+
+          # Check if user uploaded icon.png, icon.jpg, or icon.jpeg in repo root
+          SOURCE_ICON=""
+          for f in icon.png icon.jpg icon.jpeg app/src/main/res/drawable/icon.png app/src/main/res/drawable/icon.jpg; do
+            if [ -f "$f" ]; then
+              SOURCE_ICON="$f"
+              break
+            fi
+          done
+
+          if [ -z "$SOURCE_ICON" ]; then
+            echo "No custom photo found, generating clean fallback icon..."
+            convert -size 512x512 xc:"#2563EB" -fill white -gravity center -draw "roundrectangle 96,96 416,416 48,48" fallback_icon.png
+            SOURCE_ICON="fallback_icon.png"
+          else
+            echo "Using user custom icon: $SOURCE_ICON"
+          fi
+
+          # Generate square and round launcher icons for all Android densities
+          declare -A SIZES=( ["mdpi"]=48 ["hdpi"]=72 ["xhdpi"]=96 ["xxhdpi"]=144 ["xxxhdpi"]=192 )
+          for density in "${!SIZES[@]}"; do
+            sz=${SIZES[$density]}
+            convert "$SOURCE_ICON" -resize ${sz}x${sz}^ -gravity center -extent ${sz}x${sz} "app/src/main/res/mipmap-${density}/ic_launcher.png"
+            convert "$SOURCE_ICON" -resize ${sz}x${sz}^ -gravity center -extent ${sz}x${sz} "app/src/main/res/mipmap-${density}/ic_launcher_round.png"
+          done
+
+      - name: Generate Release Keystore via keytool
+        run: |
+          keytool -genkeypair -v             -keystore app/release.keystore             -keyalg RSA             -keysize 2048             -validity 10000             -alias edgekey             -storepass androidrelease             -keypass androidrelease             -dname "CN=RealmeEdgeVolume, OU=Mobile, O=Personal, L=Jaipur, ST=Rajasthan, C=IN"
+
+      - name: Setup Gradle (No Wrapper Binary Required)
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.6'
+
+      - name: Build Signed Release APK
+        run: gradle assembleRelease --no-daemon
+
+      - name: Upload Signed Release APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Realme6-EdgeVolume-Signed-Release-APK
+          path: app/build/outputs/apk/release/*.apk
